@@ -1,12 +1,11 @@
 import os
-import bcrypt
 
 from flask import Flask, render_template, request, flash, redirect, session, g
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
 from forms import UserAddForm, LoginForm, MessageForm, UserEditForm
-from models import db, connect_db, User, Message
+from models import db, connect_db, User, Message, Likes
 
 
 CURR_USER_KEY = "curr_user"
@@ -235,9 +234,45 @@ def profile():
                 flash('You have updated your profile!', 'success')
 
                 return redirect(f'users/{g.user.id}')
+        else:
+            flash('Your password does not match!', 'danger')
+
+    return render_template('users/edit.html', user_id=user.id, form=form)
+
+
+@app.route('/users/add_like/<int:msg_id>', methods=["POST"])
+def add_like(msg_id):
+    """Add message to user's likes, or remove if already in likes"""
+    
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
 
     else:
-        return render_template('users/edit.html', user=user, form=form)
+        msg = Message.query.get(msg_id)
+        user = g.user
+        if msg not in user.likes:
+
+            like = Likes(user_id=user.id, message_id=msg_id)
+            db.session.add(like)
+            db.session.commit()
+            
+        else:
+            Likes.query.filter_by(message_id=msg_id).delete()
+            db.session.commit()
+
+        return redirect('/')
+
+
+@app.route('/users/<int:user_id>/likes')
+def show_likes(user_id):
+    """Show messages that user has liked"""
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    user = User.query.get_or_404(user_id)
+    return render_template(f'users/likes.html', user=user)
 
 
 
@@ -299,7 +334,12 @@ def messages_destroy(message_id):
         flash("Access unauthorized.", "danger")
         return redirect("/")
 
-    msg = Message.query.get(message_id)
+    msg = Message.query.get_or_404(message_id)
+
+    if msg.user_id != g.user.id:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
     db.session.delete(msg)
     db.session.commit()
 
@@ -320,7 +360,8 @@ def homepage():
 
     if g.user:
         messages = (Message
-                    .query
+                    .query                    
+                    .filter(Message.user_id.in_([f.id for f in g.user.following] + [g.user.id]))
                     .order_by(Message.timestamp.desc())
                     .limit(100)
                     .all())

@@ -51,8 +51,11 @@ class MessageViewTestCase(TestCase):
 
         db.session.commit()
 
+    def tearDown(self):
+        db.session.rollback()
+
     def test_add_message(self):
-        """Can use add a message?"""
+        """Can user add a message?"""
 
         # Since we need to change the session to mimic logging in,
         # we need to use the changing-session trick:
@@ -71,3 +74,108 @@ class MessageViewTestCase(TestCase):
 
             msg = Message.query.one()
             self.assertEqual(msg.text, "Hello")
+
+    def test_add_message_not_logged_in(self):
+        """Is unauthorized user prevented from adding messages?"""
+
+        with self.client as c:        
+            
+            resp = c.post("/messages/new", data={"text": "Hello"}, follow_redirects=True)
+
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("Access unauthorized", str(resp.data))
+
+
+    def test_show_message(self):
+        """Does individual message display when selected?"""
+
+        m = Message(
+            id=3,
+            text="I am a test message.",
+            user_id=self.testuser.id
+        )
+        db.session.add(m)
+        db.session.commit()
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY]= self.testuser.id
+
+            m = Message.query.get(3)
+            resp = c.get(f"/messages/{m.id}")
+            html = resp.get_data(as_text=True)
+
+            self.assertIn("I am a test message.", html)
+            self.assertIn('<ul class="list-group no-hover" id="messages">', html)
+
+
+    def test_delete_message(self):
+        """Can user delete their own messages?"""
+
+        m = Message(
+            id=3,
+            text="Delete me.",
+            user_id=self.testuser.id
+            )
+
+        db.session.add(m)
+        db.session.commit()
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY]= self.testuser.id
+
+            resp = c.post('/messages/3/delete', follow_redirects=True)
+            self.assertEqual(resp.status_code, 200)
+
+            mess = Message.query.get(3)
+            self.assertIsNone(mess)
+
+
+    def test_prevent_delete_message(self):
+        """Is user prevented from deleting messages that are not their own?"""
+
+        u2 = User(
+            username="testuser2",
+            email="test2@test.com",
+            password="testuser2",
+            image_url=None
+            )
+        u2.id = 7
+
+        m2 = Message(
+            id=4,
+            text="I am a test message.",
+            user_id=self.testuser.id
+            )
+
+        db.session.add_all([u2, m2])
+        db.session.commit()
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY]= 7
+
+            resp = c.post('/messages/4/delete', follow_redirects=True)
+            self.assertEqual(resp.status_code, 200)
+            self.assertIsNotNone(m2)
+
+
+    def test_delete_message_not_logged_in(self):
+        """Is unauthorized user prevented from deleting messages?"""
+        
+        m = Message(
+            id=7,
+            text="Try to delete me",
+            user_id=self.testuser.id
+        )
+        db.session.add(m)
+        db.session.commit()
+
+        with self.client as c:
+            resp = c.post("/messages/7/delete", follow_redirects=True)
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("Access unauthorized", str(resp.data))
+
+            m = Message.query.get(7)
+            self.assertIsNotNone(m)
